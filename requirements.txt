@@ -1,0 +1,5 @@
+asyncio
+websockets
+python-dotenv
+rich
+aiohttp
