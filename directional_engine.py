@@ -3,8 +3,9 @@ import time
 import logging
 from config import (
     GAP_THRESHOLD_DEFAULT, CVD_THRESHOLD_PCT, VELOCITY_MIN_DELTA, 
-    DIRECTIONAL_MAX_ODDS, BASE_SHARES, SNIPER_ZONE_START, 
-    SNIPER_ZONE_END, OVERRIDE_GAP_THRESHOLD, HEARTBEAT_INTERVAL
+    DIRECTIONAL_MAX_ODDS, BASE_SHARES, SNIPER_ZONE_END, 
+    CONFIRMATION_WINDOW_START, OVERRIDE_WINDOW_START,
+    OVERRIDE_GAP_THRESHOLD, HEARTBEAT_INTERVAL
 )
 from discovery import MarketDiscovery
 from executor import Executor
@@ -101,13 +102,11 @@ class DirectionalEngine:
                     await self._async_log(f"RELOAD: New Window Started @ {self.window_start}")
 
                 # State Machine based on t_minus
-                if self.t_minus > 60:
+                if self.t_minus > CONFIRMATION_WINDOW_START + 15:
                     self.status = "IDLE"
-                elif 30 < self.t_minus <= 60:
-                    self.status = "WARMING_UP"
-                elif SNIPER_ZONE_END <= self.t_minus <= SNIPER_ZONE_START:
-                    self.status = "SNIPER_ZONE"
-                elif self.t_minus < SNIPER_ZONE_END:
+                elif SNIPER_ZONE_END < self.t_minus <= CONFIRMATION_WINDOW_START + 15:
+                    self.status = "SNIPER_READY"
+                elif self.t_minus <= SNIPER_ZONE_END:
                     self.status = "CEASE_FIRE"
 
                 hl_state = self.hl_feed.get_state()
@@ -163,51 +162,61 @@ class DirectionalEngine:
                 elif self.bias == "DOWN" and cvd > 30:
                     veto = True
 
-                # Override vs Normal
-                trigger_reason = ""
-                if abs_gap >= OVERRIDE_GAP_THRESHOLD:
-                    self.gate_passed = True
-                    trigger_reason = "Hyper-Sniper Override"
-                else:
-                    gap_pass = abs_gap > GAP_THRESHOLD_DEFAULT
-                    cvd_pass = not veto and ((self.bias == "UP" and cvd > CVD_THRESHOLD_PCT) or (self.bias == "DOWN" and cvd < -CVD_THRESHOLD_PCT))
-                    vel_pass = abs_velocity > VELOCITY_MIN_DELTA
-                    self.gate_passed = gap_pass and cvd_pass and vel_pass
-                    trigger_reason = "Triple Confirmation"
+                # Signal Evaluation
+                is_override = abs_gap >= OVERRIDE_GAP_THRESHOLD
+                
+                gap_pass = abs_gap >= GAP_THRESHOLD_DEFAULT
+                cvd_pass = not veto and ((self.bias == "UP" and cvd >= CVD_THRESHOLD_PCT) or (self.bias == "DOWN" and cvd <= -CVD_THRESHOLD_PCT))
+                vel_pass = abs_velocity >= VELOCITY_MIN_DELTA
+                is_triple = gap_pass and cvd_pass and vel_pass
 
-                # Execution Block
-                if self.gate_passed and not self.order_sent and self.token_up:
-                    if self.status != "SNIPER_ZONE":
-                        # Log ini hanya muncul sesekali agar tidak spam
-                        if int(now) % 10 == 0:
-                            logger.debug(f"Signal Ready but waiting for SNIPER_ZONE (Current: {self.status})")
+                # Dual Window Execution Block
+                trigger_reason = ""
+                can_execute = False
+                
+                if is_override:
+                    if SNIPER_ZONE_END <= self.t_minus <= OVERRIDE_WINDOW_START:
+                        can_execute = True
+                        trigger_reason = f"Hyper-Sniper Override"
                     else:
-                        target_ask = poly_state["up_ask"] if self.bias == "UP" else poly_state["down_ask"]
+                        if int(now) % 5 == 0:
+                            logger.debug(f"Override Signal Ready but outside window T-{self.t_minus}s")
+                
+                elif is_triple:
+                    if SNIPER_ZONE_END <= self.t_minus <= CONFIRMATION_WINDOW_START:
+                        can_execute = True
+                        trigger_reason = f"Triple Confirmation"
+                    else:
+                        if int(now) % 5 == 0:
+                            logger.debug(f"Triple Signal Ready but outside window T-{self.t_minus}s")
+
+                self.gate_passed = can_execute # For UI indication
+
+                if can_execute and not self.order_sent and self.token_up:
+                    target_ask = poly_state["up_ask"] if self.bias == "UP" else poly_state["down_ask"]
+                    
+                    if 0 < target_ask <= DIRECTIONAL_MAX_ODDS:
+                        # Atomic Lock
+                        self.order_sent = True
                         
-                        if 0 < target_ask <= DIRECTIONAL_MAX_ODDS:
-                            # Atomic Lock
-                            self.order_sent = True
-                            
-                            await self._async_log(f"TARGET TRIGGER: {trigger_reason} | {self.bias} Gap:{abs_gap:.2f} CVD:{cvd:.1f}")
-                            
-                            # Non-Blocking Call
-                            asyncio.create_task(self.executor.execute(
-                                bias=self.bias,
-                                size=BASE_SHARES,
-                                target_ask=target_ask,
-                                token_up=self.token_up,
-                                token_down=self.token_down
-                            ))
-                            
-                            self.inventory_position = self.bias
-                            self.inventory_risk += (BASE_SHARES * target_ask)
-                        else:
-                            # Log jika sinyal OK tapi harga Polymarket tidak masuk akal atau kosong
-                            # Gunakan cooldown yang lebih lama (5 detik) agar tidak spam log
-                            now_ts = time.time()
-                            if not hasattr(self, '_last_skip_log') or (now_ts - self._last_skip_log > 5):
-                                await self._async_log(f"SKIP: Signal OK but Price Invalid ({target_ask})")
-                                self._last_skip_log = now_ts
+                        await self._async_log(f"TARGET TRIGGER: {trigger_reason} | {self.bias} Gap:{abs_gap:.2f} CVD:{cvd:.1f} T-{self.t_minus}s")
+                        
+                        # Non-Blocking Call
+                        asyncio.create_task(self.executor.execute(
+                            bias=self.bias,
+                            size=BASE_SHARES,
+                            target_ask=target_ask,
+                            token_up=self.token_up,
+                            token_down=self.token_down
+                        ))
+                        
+                        self.inventory_position = self.bias
+                        self.inventory_risk += (BASE_SHARES * target_ask)
+                    else:
+                        now_ts = time.time()
+                        if not hasattr(self, '_last_skip_log') or (now_ts - self._last_skip_log > 5):
+                            await self._async_log(f"SKIP: Signal OK but Price Invalid ({target_ask})")
+                            self._last_skip_log = now_ts
 
             except Exception as e:
                 await self._async_log(f"LOOP ERROR: {e}")

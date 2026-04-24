@@ -32,8 +32,8 @@ class Dashboard:
         status = engine_state.get("status", "IDLE")
         
         status_color = "white"
-        if status == "SNIPER_ZONE": status_color = "bold green"
-        elif status == "WARMING_UP": status_color = "bold yellow"
+        if status == "SNIPER_READY": status_color = "bold green"
+        elif status == "IDLE": status_color = "bold yellow"
         elif status == "CEASE_FIRE": status_color = "bold red"
 
         # Memusatkan teks seperti di PRD
