@@ -15,6 +15,15 @@ class Executor:
                 key=config.POLYMARKET_PRIVATE_KEY, 
                 chain_id=config.CHAIN_ID
             )
+            
+            # Apply API Credentials if available
+            if config.POLYMARKET_API_KEY:
+                self.client.set_api_creds(
+                    config.POLYMARKET_API_KEY, 
+                    config.POLYMARKET_API_SECRET, 
+                    config.POLYMARKET_API_PASSPHRASE
+                )
+                logger.info("Executor: API Credentials applied successfully.")
             self.is_ready = True
             logger.info("Executor: Real ClobClient Initialized (LIVE MODE)")
         except Exception as e:

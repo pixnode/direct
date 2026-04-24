@@ -5,6 +5,9 @@ load_dotenv()
 
 # Execution Credentials
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")
+POLYMARKET_API_KEY = os.getenv("POLYMARKET_API_KEY", "")
+POLYMARKET_API_SECRET = os.getenv("POLYMARKET_API_SECRET", "")
+POLYMARKET_API_PASSPHRASE = os.getenv("POLYMARKET_API_PASSPHRASE", "")
 POLYMARKET_HOST = os.getenv("POLYMARKET_HOST", "https://clob.polymarket.com")
 CHAIN_ID = int(os.getenv("CHAIN_ID", "137"))
 
