@@ -187,7 +187,7 @@ class DirectionalEngine:
                             # Atomic Lock
                             self.order_sent = True
                             
-                            await self._async_log(f"🎯 TRIGGER: {trigger_reason} | {self.bias} Gap:{abs_gap:.2f} CVD:{cvd:.1f}")
+                            await self._async_log(f"TARGET TRIGGER: {trigger_reason} | {self.bias} Gap:{abs_gap:.2f} CVD:{cvd:.1f}")
                             
                             # Non-Blocking Call
                             asyncio.create_task(self.executor.execute(
@@ -202,8 +202,11 @@ class DirectionalEngine:
                             self.inventory_risk += (BASE_SHARES * target_ask)
                         else:
                             # Log jika sinyal OK tapi harga Polymarket tidak masuk akal atau kosong
-                            if int(now) % 5 == 0:
-                                await self._async_log(f"⚠️ SKIP: Signal OK but Price Invalid ({target_ask})")
+                            # Gunakan cooldown yang lebih lama (5 detik) agar tidak spam log
+                            now_ts = time.time()
+                            if not hasattr(self, '_last_skip_log') or (now_ts - self._last_skip_log > 5):
+                                await self._async_log(f"SKIP: Signal OK but Price Invalid ({target_ask})")
+                                self._last_skip_log = now_ts
 
             except Exception as e:
                 await self._async_log(f"LOOP ERROR: {e}")

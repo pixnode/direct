@@ -16,7 +16,7 @@ logging.basicConfig(
 )
 
 async def main():
-    print("🚀 Starting ADS v1.0 in HEADLESS MODE...")
+    print("Starting ADS v1.0 in HEADLESS MODE...")
     
     # Initialize components
     hl_feed = HyperliquidFeed()
@@ -32,7 +32,7 @@ async def main():
     ]
 
     try:
-        print("✅ Engine is running. Monitoring via ads_execution.log")
+        print("Engine is running. Monitoring via ads_execution.log")
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         pass

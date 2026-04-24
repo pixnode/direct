@@ -34,52 +34,52 @@ class MarketDiscovery:
             async with session.get(url) as response:
                 if response.status == 200:
                     data = await response.json()
-                        if data and isinstance(data, list) and len(data) > 0:
-                            market = data[0]
-                            condition_id = market.get("conditionId")
+                    if data and isinstance(data, list) and len(data) > 0:
+                        market = data[0]
+                        condition_id = market.get("conditionId")
                             
-                            # clobTokenIds is often a stringified JSON list in /markets response
-                            clob_tokens_raw = market.get("clobTokenIds", "[]")
-                            import json
-                            try:
-                                tokens = json.loads(clob_tokens_raw)
-                            except:
-                                # Fallback to standard tokens field if available
-                                tokens_list = market.get("tokens", [])
-                                tokens = [t.get("token_id") for t in tokens_list] if tokens_list else []
+                        # clobTokenIds is often a stringified JSON list in /markets response
+                        clob_tokens_raw = market.get("clobTokenIds", "[]")
+                        import json
+                        try:
+                            tokens = json.loads(clob_tokens_raw)
+                        except:
+                            # Fallback to standard tokens field if available
+                            tokens_list = market.get("tokens", [])
+                            tokens = [t.get("token_id") for t in tokens_list] if tokens_list else []
 
-                            if len(tokens) >= 2:
-                                token_up = tokens[0]
-                                token_down = tokens[1]
+                        if len(tokens) >= 2:
+                            token_up = tokens[0]
+                            token_down = tokens[1]
+                            
+                            strike = 0.0
+                            try:
+                                group_item = market.get("groupItemTitle", "")
+                                if group_item and group_item != "0":
+                                    parts = group_item.split()
+                                    strike_str = parts[-1].replace("$", "").replace(",", "")
+                                    strike = float(strike_str)
+                            except:
+                                pass
                                 
-                                strike = 0.0
+                            if strike == 0.0:
+                                question = market.get("question", "")
                                 try:
-                                    group_item = market.get("groupItemTitle", "")
-                                    if group_item and group_item != "0":
-                                        parts = group_item.split()
-                                        strike_str = parts[-1].replace("$", "").replace(",", "")
-                                        strike = float(strike_str)
+                                    import re
+                                    match = re.search(r'\$([\d,]+\.?\d*)', question)
+                                    if match:
+                                        strike = float(match.group(1).replace(",", ""))
                                 except:
                                     pass
-                                    
-                                if strike == 0.0:
-                                    question = market.get("question", "")
-                                    try:
-                                        import re
-                                        match = re.search(r'\$([\d,]+\.?\d*)', question)
-                                        if match:
-                                            strike = float(match.group(1).replace(",", ""))
-                                    except:
-                                        pass
 
-                                return {
-                                    "slug": slug,
-                                    "condition_id": condition_id,
-                                    "token_up": token_up,
-                                    "token_down": token_down,
-                                    "strike": strike,
-                                    "start_time": market.get("eventStartTime") or market.get("startTime")
-                                }
+                            return {
+                                "slug": slug,
+                                "condition_id": condition_id,
+                                "token_up": token_up,
+                                "token_down": token_down,
+                                "strike": strike,
+                                "start_time": market.get("eventStartTime") or market.get("startTime")
+                            }
         except Exception as e:
             logger.error(f"Discovery Error for {slug}: {e}")
         return None
