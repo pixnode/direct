@@ -196,7 +196,10 @@ class DirectionalEngine:
                 if can_execute and not self.order_sent and self.token_up:
                     target_ask = poly_state["up_ask"] if self.bias == "UP" else poly_state["down_ask"]
                     
-                    if 0 < target_ask <= DIRECTIONAL_MAX_ODDS:
+                    # Panic Buy Mode: Override ignores MAX_ODDS
+                    effective_max_odds = 0.99 if "Override" in trigger_reason else DIRECTIONAL_MAX_ODDS
+                    
+                    if 0 < target_ask <= effective_max_odds:
                         # Atomic Lock
                         self.order_sent = True
                         
