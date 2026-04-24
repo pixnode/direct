@@ -119,7 +119,18 @@ class DirectionalEngine:
                 velocity = hl_state["velocity"]
                 
                 if now - last_heartbeat > 10:
-                    await self._async_log(f"HEARTBEAT: [{self.status}] T-{self.t_minus}s | Price:{hl_price} Gap:{self.gap:.2f}")
+                    # Determine gate status for logging
+                    g_ok = "OK" if abs_gap > GAP_THRESHOLD_DEFAULT else "FAIL"
+                    c_ok = "OK" if ((self.bias == "UP" and cvd > CVD_THRESHOLD_PCT) or (self.bias == "DOWN" and cvd < -CVD_THRESHOLD_PCT)) else "FAIL"
+                    v_ok = "OK" if abs_velocity > VELOCITY_MIN_DELTA else "FAIL"
+                    
+                    hb_msg = (
+                        f"HEARTBEAT | STAT:{self.status} | T-{self.t_minus}s | "
+                        f"P:{hl_price:,.2f} | S:{current_strike:,.2f} | "
+                        f"G:{abs_gap:.2f}({g_ok}) | C:{cvd:.1f}%({c_ok}) | "
+                        f"V:{abs_velocity:.1f}({v_ok}) | BIAS:{self.bias}"
+                    )
+                    await self._async_log(hb_msg)
                     last_heartbeat = now
 
                 # Sync Strike
