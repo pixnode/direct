@@ -36,8 +36,15 @@ class Dashboard:
         elif status == "WARMING_UP": status_color = "bold yellow"
         elif status == "CEASE_FIRE": status_color = "bold red"
 
-        return Panel(f"[bold cyan]🎯 WINDOW:[/bold cyan] {slug} | [bold yellow]⏱️ T-MINUS:[/bold yellow] {t_minus}s | [bold]STATUS:[/bold] [{status_color}]{status}[/]", 
-                     style="white on blue")
+        # Memusatkan teks seperti di PRD
+        header_text = Text.assemble(
+            ("🎯 TARGET WINDOW: ", "bold cyan"), (f"{slug} ", "white"),
+            ("| ", "bright_black"),
+            ("⏱️ T-MINUS: ", "bold yellow"), (f"{t_minus}s ", "white"),
+            ("| ", "bright_black"),
+            ("STATUS: ", "bold"), (f"[{status}]", status_color)
+        )
+        return Panel(header_text, style="white on blue", box=None, justify="center")
 
     def generate_market_panel(self):
         hl_state = self.hl_feed.get_state()
@@ -50,36 +57,38 @@ class Dashboard:
         cvd = hl_state["cvd"]
         vel = hl_state["velocity"]
 
-        gap_pass = "[green]PASSED[/green]" if engine_state["gap_pass"] else "[red]FAILED[/red]"
-        cvd_pass = "[green]PASSED[/green]" if engine_state["cvd_pass"] else "[red]FAILED[/red]"
-        vel_pass = "[green]PASSED[/green]" if engine_state["vel_pass"] else "[red]FAILED[/red]"
+        gap_pass = "[bold green][PASSED][/]" if engine_state["gap_pass"] else "[bold red][FAILED][/]"
+        cvd_pass = "[bold green][PASSED][/]" if engine_state["cvd_pass"] else "[bold red][FAILED][/]"
+        vel_pass = "[bold green][PASSED][/]" if engine_state["vel_pass"] else "[bold red][FAILED][/]"
 
-        text = f"""[bold]Live Market & Triple Confirmation[/bold]
+        text = f"""
+[bold white]HL Spot Price :[/] [cyan]${hl_price:,.2f}[/]
+[bold white]Poly Strike    :[/] [cyan]${strike:,.2f}[/]
 
-HL Spot Price : ${hl_price:,.2f}
-Poly Strike   : ${strike:,.2f}
-
-[bold yellow][TRIPLE CONFIRMATION GATE][/bold yellow]
-• GAP ($)     : {abs(gap):.2f}    {gap_pass}
-• CVD (%)     : {abs(cvd):.2f}%    {cvd_pass}
-• VELOCITY    : {abs(vel):.2f} $/s  {vel_pass}
+[bold yellow][TRIPLE CONFIRMATION GATE][/]
+• GAP ($)     : {abs(gap):<8.2f} {gap_pass}
+• CVD (%)     : {abs(cvd):<8.2f}% {cvd_pass}
+• VELOCITY    : {abs(vel):<8.2f} $/s {vel_pass}
 """
-        return Panel(text, title="Live Market", border_style="cyan")
+        return Panel(text, title="[bold]LIVE MARKET & TRIPLE CONFIRMATION[/]", border_style="cyan")
 
     def generate_inventory_panel(self):
         poly_state = self.poly_feed.get_state()
         engine_state = self.engine.get_state()
         
-        text = f"""[bold]Inventory & Risk[/bold]
+        pos_color = "white"
+        if engine_state["inventory_position"] == "UP": pos_color = "green"
+        elif engine_state["inventory_position"] == "DOWN": pos_color = "red"
 
-POSITION : [{engine_state["inventory_position"]}]
-RISK USD : ${engine_state["inventory_risk"]:.2f}
+        text = f"""
+[bold white]POSITION :[/] [{pos_color}]{engine_state["inventory_position"]}[/]
+[bold white]RISK USD :[/] [green]${engine_state["inventory_risk"]:.2f}[/]
 
-[bold yellow][TARGET ODDS LIMIT][/bold yellow]
+[bold yellow][TARGET ODDS LIMIT][/]
 • UP Ask   : {poly_state["up_ask"]:.2f}
 • DOWN Ask : {poly_state["down_ask"]:.2f}
 """
-        return Panel(text, title="Inventory", border_style="magenta")
+        return Panel(text, title="[bold]INVENTORY & RISK[/]", border_style="magenta")
 
     def generate_logs_panel(self):
         engine_state = self.engine.get_state()
@@ -89,13 +98,18 @@ RISK USD : ${engine_state["inventory_risk"]:.2f}
             self.last_engine_log = current_log
             
         log_text = "\n".join(self.logs)
-        return Panel(log_text, title="Execution Logs", border_style="white")
+        return Panel(log_text, title="[bold]EXECUTION LOGS[/]", border_style="white")
 
     async def run(self):
-        with Live(self.layout, refresh_per_second=10) as live:
+        # Gunakan refresh rate yang lebih rendah (4Hz) agar UI lebih "tenang"
+        with Live(self.layout, refresh_per_second=4, screen=False) as live:
             while True:
-                self.layout["header"].update(self.generate_header())
-                self.layout["main"]["market"].update(self.generate_market_panel())
-                self.layout["main"]["inventory"].update(self.generate_inventory_panel())
-                self.layout["logs"].update(self.generate_logs_panel())
-                await asyncio.sleep(0.1)
+                try:
+                    self.layout["header"].update(self.generate_header())
+                    self.layout["main"]["market"].update(self.generate_market_panel())
+                    self.layout["main"]["inventory"].update(self.generate_inventory_panel())
+                    self.layout["logs"].update(self.generate_logs_panel())
+                except Exception:
+                    pass
+                # Update setiap 250ms (4 kali per detik)
+                await asyncio.sleep(0.25)
