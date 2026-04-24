@@ -21,6 +21,7 @@ class HyperliquidFeed:
         self.velocity_value = 0.0
         
         self.is_connected = False
+        self.last_msg_time = 0.0
 
     async def connect(self):
         while True:
@@ -41,6 +42,7 @@ class HyperliquidFeed:
                 await asyncio.sleep(1)
 
     async def _process_message(self, message):
+        self.last_msg_time = asyncio.get_event_loop().time()
         data = json.loads(message)
         if data.get("channel") == "trades":
             for trade in data["data"]:
@@ -112,5 +114,6 @@ class HyperliquidFeed:
             "price": self.current_price,
             "cvd": self.cvd_value,
             "velocity": self.velocity_value,
-            "connected": self.is_connected
+            "connected": self.is_connected,
+            "last_msg_time": self.last_msg_time
         }

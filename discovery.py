@@ -8,6 +8,13 @@ logger = logging.getLogger("ADS_Engine")
 class MarketDiscovery:
     def __init__(self):
         self.gamma_api_url = "https://gamma-api.polymarket.com/events"
+        self._session = None
+
+    async def _get_session(self):
+        if self._session is None or self._session.closed:
+            import aiohttp
+            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        return self._session
 
     def get_current_epoch(self):
         # Current 5-minute epoch start time
@@ -23,10 +30,10 @@ class MarketDiscovery:
         url = f"https://gamma-api.polymarket.com/markets?slug={slug}"
         
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=5) as response:
-                    if response.status == 200:
-                        data = await response.json()
+            session = await self._get_session()
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
                         if data and isinstance(data, list) and len(data) > 0:
                             market = data[0]
                             condition_id = market.get("conditionId")

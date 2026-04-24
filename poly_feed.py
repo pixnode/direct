@@ -16,6 +16,7 @@ class PolyFeed:
         self.down_ask = 0.0
         self.ws = None
         self.is_connected = False
+        self.last_msg_time = 0.0
 
     async def update_subscription(self, token_up, token_down, strike):
         self.token_id_up = token_up
@@ -52,6 +53,7 @@ class PolyFeed:
                 await asyncio.sleep(5)
 
     async def _process_message(self, message):
+        self.last_msg_time = asyncio.get_event_loop().time()
         try:
             data = json.loads(message)
             items = data if isinstance(data, list) else [data]
@@ -86,5 +88,6 @@ class PolyFeed:
             "up_ask": self.up_ask,
             "down_ask": self.down_ask,
             "strike_price": self.strike_price,
-            "connected": self.is_connected
+            "connected": self.is_connected,
+            "last_msg_time": self.last_msg_time
         }

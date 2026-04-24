@@ -124,11 +124,17 @@ class DirectionalEngine:
                     c_ok = "OK" if ((self.bias == "UP" and cvd > CVD_THRESHOLD_PCT) or (self.bias == "DOWN" and cvd < -CVD_THRESHOLD_PCT)) else "FAIL"
                     v_ok = "OK" if abs_velocity > VELOCITY_MIN_DELTA else "FAIL"
                     
+                    # Feed Health Checks (Last msg < 30s)
+                    loop_now = asyncio.get_event_loop().time()
+                    h_health = "OK" if (loop_now - hl_state.get("last_msg_time", 0)) < 30 else "DEAD"
+                    p_health = "OK" if (loop_now - poly_state.get("last_msg_time", 0)) < 30 else "DEAD"
+
                     hb_msg = (
                         f"HEARTBEAT | STAT:{self.status} | T-{self.t_minus}s | "
                         f"P:{hl_price:,.2f} | S:{current_strike:,.2f} | "
                         f"G:{abs_gap:.2f}({g_ok}) | C:{cvd:.1f}%({c_ok}) | "
-                        f"V:{abs_velocity:.1f}({v_ok}) | BIAS:{self.bias}"
+                        f"V:{abs_velocity:.1f}({v_ok}) | BIAS:{self.bias} | "
+                        f"FEED(HL:{h_health} PL:{p_health})"
                     )
                     await self._async_log(hb_msg)
                     last_heartbeat = now
