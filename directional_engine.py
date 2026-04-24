@@ -175,26 +175,35 @@ class DirectionalEngine:
                     trigger_reason = "Triple Confirmation"
 
                 # Execution Block
-                if self.status == "SNIPER_ZONE" and self.gate_passed and not self.order_sent and self.token_up:
-                    target_ask = poly_state["up_ask"] if self.bias == "UP" else poly_state["down_ask"]
-                    
-                    if 0 < target_ask <= DIRECTIONAL_MAX_ODDS:
-                        # Atomic Lock
-                        self.order_sent = True
+                if self.gate_passed and not self.order_sent and self.token_up:
+                    if self.status != "SNIPER_ZONE":
+                        # Log ini hanya muncul sesekali agar tidak spam
+                        if int(now) % 10 == 0:
+                            logger.debug(f"Signal Ready but waiting for SNIPER_ZONE (Current: {self.status})")
+                    else:
+                        target_ask = poly_state["up_ask"] if self.bias == "UP" else poly_state["down_ask"]
                         
-                        await self._async_log(f"🎯 TRIGGER: {trigger_reason} | {self.bias} Gap:{abs_gap:.2f} CVD:{cvd:.1f}")
-                        
-                        # Non-Blocking Call
-                        asyncio.create_task(self.executor.execute(
-                            bias=self.bias,
-                            size=BASE_SHARES,
-                            target_ask=target_ask,
-                            token_up=self.token_up,
-                            token_down=self.token_down
-                        ))
-                        
-                        self.inventory_position = self.bias
-                        self.inventory_risk += (BASE_SHARES * target_ask)
+                        if 0 < target_ask <= DIRECTIONAL_MAX_ODDS:
+                            # Atomic Lock
+                            self.order_sent = True
+                            
+                            await self._async_log(f"🎯 TRIGGER: {trigger_reason} | {self.bias} Gap:{abs_gap:.2f} CVD:{cvd:.1f}")
+                            
+                            # Non-Blocking Call
+                            asyncio.create_task(self.executor.execute(
+                                bias=self.bias,
+                                size=BASE_SHARES,
+                                target_ask=target_ask,
+                                token_up=self.token_up,
+                                token_down=self.token_down
+                            ))
+                            
+                            self.inventory_position = self.bias
+                            self.inventory_risk += (BASE_SHARES * target_ask)
+                        else:
+                            # Log jika sinyal OK tapi harga Polymarket tidak masuk akal atau kosong
+                            if int(now) % 5 == 0:
+                                await self._async_log(f"⚠️ SKIP: Signal OK but Price Invalid ({target_ask})")
 
             except Exception as e:
                 await self._async_log(f"LOOP ERROR: {e}")
