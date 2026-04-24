@@ -95,8 +95,14 @@ class Dashboard:
         # Add a small visual indicator for the window
         t = e_state['t_minus']
         win_text = "[red]WAITING[/]"
-        if 15 <= t <= 45: win_text = "[bold green]TRIPLE WINDOW[/]"
-        if 15 <= t <= 25: win_text = "[bold magenta]OVERRIDE WINDOW[/]"
+        if 15 <= t <= 120: 
+            if 15 <= t <= 45: win_text = "[bold green]TRIPLE WINDOW[/]"
+            if 15 <= t <= 120 and e_state['gap'] >= 110: # Special logic for display
+                win_text = "[bold magenta]OVERRIDE WINDOW[/]"
+            elif 15 <= t <= 120:
+                # If we are in the long tail but gap not enough for override
+                if t > 45: win_text = "[yellow]OBSERVING[/]"
+        
         if t < 15: win_text = "[bold red]CLOSED[/]"
         
         table.add_row("", "")

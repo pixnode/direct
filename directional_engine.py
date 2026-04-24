@@ -102,9 +102,10 @@ class DirectionalEngine:
                     await self._async_log(f"RELOAD: New Window Started @ {self.window_start}")
 
                 # State Machine based on t_minus
-                if self.t_minus > CONFIRMATION_WINDOW_START + 15:
+                max_window = max(CONFIRMATION_WINDOW_START, OVERRIDE_WINDOW_START)
+                if self.t_minus > max_window + 15:
                     self.status = "IDLE"
-                elif SNIPER_ZONE_END < self.t_minus <= CONFIRMATION_WINDOW_START + 15:
+                elif SNIPER_ZONE_END < self.t_minus <= max_window + 15:
                     self.status = "SNIPER_READY"
                 elif self.t_minus <= SNIPER_ZONE_END:
                     self.status = "CEASE_FIRE"
