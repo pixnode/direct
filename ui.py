@@ -101,15 +101,23 @@ class Dashboard:
         return Panel(log_text, title="[bold]EXECUTION LOGS[/]", border_style="white")
 
     async def run(self):
-        # Gunakan refresh rate yang lebih rendah (4Hz) agar UI lebih "tenang"
-        with Live(self.layout, refresh_per_second=4, screen=False) as live:
+        # Gunakan screen=True untuk performa terminal yang lebih baik di SSH/Server
+        # Ini akan membersihkan layar dan membuat UI lebih "tenang" dan responsif
+        with Live(self.layout, refresh_per_second=4, screen=True) as live:
             while True:
+                # Update layout satu per satu dengan proteksi minimal
                 try:
-                    self.layout["header"].update(self.generate_header())
-                    self.layout["main"]["market"].update(self.generate_market_panel())
-                    self.layout["main"]["inventory"].update(self.generate_inventory_panel())
-                    self.layout["logs"].update(self.generate_logs_panel())
-                except Exception:
-                    pass
-                # Update setiap 250ms (4 kali per detik)
+                    header = self.generate_header()
+                    market = self.generate_market_panel()
+                    inventory = self.generate_inventory_panel()
+                    logs = self.generate_logs_panel()
+                    
+                    self.layout["header"].update(header)
+                    self.layout["main"]["market"].update(market)
+                    self.layout["main"]["inventory"].update(inventory)
+                    self.layout["logs"].update(logs)
+                except Exception as e:
+                    # Jika ada error, catat ke log agar bisa kita debug
+                    self.engine.last_log = f"UI ERROR: {str(e)}"
+                
                 await asyncio.sleep(0.25)
