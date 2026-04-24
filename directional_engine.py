@@ -4,7 +4,7 @@ import logging
 from config import (
     GAP_THRESHOLD_DEFAULT, CVD_THRESHOLD_PCT, VELOCITY_MIN_DELTA, 
     DIRECTIONAL_MAX_ODDS, BASE_SHARES, SNIPER_ZONE_START, 
-    SNIPER_ZONE_END, OVERRIDE_GAP_THRESHOLD
+    SNIPER_ZONE_END, OVERRIDE_GAP_THRESHOLD, HEARTBEAT_INTERVAL
 )
 from discovery import MarketDiscovery
 from executor import Executor
@@ -118,7 +118,23 @@ class DirectionalEngine:
                 cvd = hl_state["cvd"]
                 velocity = hl_state["velocity"]
                 
-                if now - last_heartbeat > 10:
+                # Sync Strike
+                current_strike = strike
+                if current_strike == 0 and hl_price > 0:
+                    if self.reference_price == 0:
+                        self.reference_price = hl_price
+                        await self._async_log(f"REFERENCE SET: {self.reference_price}")
+                    current_strike = self.reference_price
+
+                # Directional Logic
+                if current_strike > 0 and hl_price > 0:
+                    self.gap = hl_price - current_strike
+                    self.bias = "UP" if self.gap > 0 else "DOWN" if self.gap < 0 else "NONE"
+
+                abs_gap = abs(self.gap)
+                abs_velocity = abs(velocity)
+
+                if now - last_heartbeat > HEARTBEAT_INTERVAL:
                     # Determine gate status for logging
                     g_ok = "OK" if abs_gap > GAP_THRESHOLD_DEFAULT else "FAIL"
                     c_ok = "OK" if ((self.bias == "UP" and cvd > CVD_THRESHOLD_PCT) or (self.bias == "DOWN" and cvd < -CVD_THRESHOLD_PCT)) else "FAIL"
@@ -139,22 +155,7 @@ class DirectionalEngine:
                     await self._async_log(hb_msg)
                     last_heartbeat = now
 
-                # Sync Strike
-                current_strike = strike
-                if current_strike == 0 and hl_price > 0:
-                    if self.reference_price == 0:
-                        self.reference_price = hl_price
-                        await self._async_log(f"REFERENCE SET: {self.reference_price}")
-                    current_strike = self.reference_price
 
-                # Directional Logic
-                if current_strike > 0 and hl_price > 0:
-                    self.gap = hl_price - current_strike
-                    self.bias = "UP" if self.gap > 0 else "DOWN" if self.gap < 0 else "NONE"
-
-                abs_gap = abs(self.gap)
-                abs_velocity = abs(velocity)
-                
                 # Predator Decision Logic
                 veto = False
                 if self.bias == "UP" and cvd < -30:

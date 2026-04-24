@@ -69,6 +69,12 @@ The dashboard is split into three main panels:
 **Disclaimer**: This bot is for educational purposes. Trading involves risk. Use at your own discretion.
 
 # Matikan yang lama jika ada
-pm2 stop ads-sniper
+pm2 stop ads
 # Jalankan mode headless
+pm2 start headless.py --name ads --interpreter python3
+
+git pull origin main
+source venv/bin/activate
+pip install -r requirements.txt
 pm2 start headless.py --name ads-sniper --interpreter python3
+tail -f ads_execution.log

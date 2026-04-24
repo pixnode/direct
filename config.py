@@ -22,3 +22,5 @@ OVERRIDE_GAP_THRESHOLD = float(os.getenv("OVERRIDE_GAP_THRESHOLD", "15.0"))
 # Execution Parameters
 DIRECTIONAL_MAX_ODDS = float(os.getenv("DIRECTIONAL_MAX_ODDS", "0.78"))
 BASE_SHARES = float(os.getenv("BASE_SHARES", "1.0"))
+HEARTBEAT_INTERVAL = float(os.getenv("HEARTBEAT_INTERVAL", "1.0"))
+
