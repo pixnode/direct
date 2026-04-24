@@ -125,9 +125,8 @@ class Dashboard:
         return Panel(log_content, title="[bold white]LIVE EXECUTION LOGS[/]", border_style="white")
 
     async def run(self):
-        # refresh_per_second=10 untuk "Super Fast" feeling
-        # screen=True untuk anti-glitch (full screen refresh)
-        with Live(self.layout, refresh_per_second=10, screen=True) as live:
+        # Ultra-Light Mode: 5 FPS dan tanpa screen=True agar tidak berat di terminal
+        with Live(self.layout, refresh_per_second=5, screen=False) as live:
             while True:
                 try:
                     # Atomic state fetch
@@ -141,8 +140,7 @@ class Dashboard:
                     self.layout["main"]["inventory"].update(self.get_inventory_table(e_state, p_state))
                     self.layout["logs"].update(self.get_logs_panel(e_state))
                     
-                except Exception as e:
-                    # Silent error handling to prevent UI crash, but log it
+                except Exception:
                     pass
                 
-                await asyncio.sleep(0.05) # Super fast loop
+                await asyncio.sleep(0.1) # Lebih santai agar tidak berat
