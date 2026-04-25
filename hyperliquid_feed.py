@@ -11,11 +11,12 @@ class HyperliquidFeed:
         self.current_price = 0.0
         
         # Windows
-        self.cvd_window_seconds = 300 # 5 minutes
+        self.cvd_window_seconds = 60.0 # 1 minute
         self.velocity_window_seconds = 2.0
         
         # Deques to store (timestamp, price, size, side)
-        self.trades = deque()
+        self.cvd_trades = deque()
+        self.vel_trades = deque()
         
         self.cvd_value = 0.0
         self.velocity_value = 0.0
@@ -53,58 +54,49 @@ class HyperliquidFeed:
                 
                 self.current_price = price
                 
-                # Append to trades deque
-                self.trades.append((ts, price, sz, side))
+                # Append to trades deques
+                self.cvd_trades.append((ts, price, sz, side))
+                self.vel_trades.append((ts, price, sz, side))
                 
-                # Cleanup old trades for CVD window
+                # Cleanup old trades
                 self._cleanup_old_trades(ts)
                 
                 # Recalculate metrics
                 self._calculate_metrics()
 
     def _cleanup_old_trades(self, current_ts):
-        while self.trades and (current_ts - self.trades[0][0]) > max(self.cvd_window_seconds, self.velocity_window_seconds):
-            self.trades.popleft()
+        while self.cvd_trades and (current_ts - self.cvd_trades[0][0]) > 60:
+            self.cvd_trades.popleft()
+        while self.vel_trades and (current_ts - self.vel_trades[0][0]) > 2:
+            self.vel_trades.popleft()
 
     def _calculate_metrics(self):
-        if not self.trades:
+        if not self.cvd_trades and not self.vel_trades:
             return
 
-        current_ts = self.trades[-1][0]
-        
         # Calculate CVD
         cvd_buy = 0.0
         cvd_sell = 0.0
-        
-        # Calculate Velocity
-        oldest_velocity_price = None
-        newest_velocity_price = self.trades[-1][1]
-
-        for trade in self.trades:
-            ts, price, sz, side = trade
-            
-            # CVD Logic (last 5m)
-            if (current_ts - ts) <= self.cvd_window_seconds:
-                if side == "B":
-                    cvd_buy += sz
-                else:
-                    cvd_sell += sz
-                    
-            # Velocity Logic (last 2s)
-            if (current_ts - ts) <= self.velocity_window_seconds:
-                if oldest_velocity_price is None:
-                    oldest_velocity_price = price
+        for trade in self.cvd_trades:
+            _, _, sz, side = trade
+            if side == "B":
+                cvd_buy += sz
+            else:
+                cvd_sell += sz
 
         total_vol = cvd_buy + cvd_sell
         if total_vol > 0:
-            # Net CVD % = (Buy - Sell) / Total * 100
             self.cvd_value = ((cvd_buy - cvd_sell) / total_vol) * 100.0
         else:
             self.cvd_value = 0.0
 
-        if oldest_velocity_price is not None:
-             # Velocity = Change in price over the 2 second window
+        # Calculate Velocity
+        if self.vel_trades:
+            oldest_velocity_price = self.vel_trades[0][1]
+            newest_velocity_price = self.vel_trades[-1][1]
             self.velocity_value = newest_velocity_price - oldest_velocity_price
+        else:
+            self.velocity_value = 0.0
 
     async def run(self):
         await self.connect()

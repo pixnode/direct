@@ -191,6 +191,12 @@ class DirectionalEngine:
                         if int(now) % 5 == 0:
                             logger.debug(f"Triple Signal Ready but outside window T-{self.t_minus}s")
 
+                if not can_execute and not self.order_sent:
+                    now_ts = time.time()
+                    if not hasattr(self, '_last_waiting_log') or (now_ts - self._last_waiting_log > 10):
+                        logger.info(f"Waiting for signal: gap={abs_gap:.1f}/{GAP_THRESHOLD_DEFAULT} cvd={cvd:.1f}/{CVD_THRESHOLD_PCT} vel={abs_velocity:.1f}/{VELOCITY_MIN_DELTA}")
+                        self._last_waiting_log = now_ts
+
                 self.gate_passed = can_execute # For UI indication
 
                 if can_execute and not self.order_sent and self.token_up:
