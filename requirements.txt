@@ -3,4 +3,5 @@ websockets
 python-dotenv
 rich
 aiohttp
+aiofiles
 py-clob-client
