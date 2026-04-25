@@ -3,7 +3,7 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs
+from py_clob_client.clob_types import OrderArgs, BalanceAllowanceParams, AssetType
 import config
 
 logger = logging.getLogger("ADS_Engine")
@@ -17,7 +17,9 @@ class Executor:
             self.client = ClobClient(
                 host=config.POLYMARKET_HOST, 
                 key=config.POLYMARKET_PRIVATE_KEY, 
-                chain_id=config.CHAIN_ID
+                chain_id=config.CHAIN_ID,
+                funder=config.POLYMARKET_FUNDER_ADDRESS,
+                signature_type=1
             )
             
             from py_clob_client.clob_types import ApiCreds
@@ -29,12 +31,23 @@ class Executor:
                 api_passphrase=config.POLYMARKET_API_PASSPHRASE
             )
             self.client.set_api_creds(creds)
-            logger.info("Executor: API Credentials applied successfully.")
+            
             self.is_ready = True
-
             logger.info("Executor: Real ClobClient Initialized (LIVE MODE)")
         except Exception as e:
             logger.error(f"Executor Initialization Failed: {e}")
+
+    def get_balance(self):
+        """Fetches available USDC balance from CLOB API (no RPC needed)."""
+        if not self.is_ready: return 0.0
+        try:
+            params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            resp = self.client.get_balance_allowance(params)
+            # Response is a dict containing 'balance' and 'allowance' strings
+            return float(resp.get('balance', 0.0))
+        except Exception as e:
+            logger.error(f"Executor: Failed to fetch balance: {e}")
+            return 0.0
 
     async def execute(self, bias, size, target_ask, token_up, token_down, epoch_end_time):
         """
@@ -47,16 +60,27 @@ class Executor:
 
         token_to_buy = token_up if bias == "UP" else token_down
         
-        # Calculate Expiry: Buffer seconds before epoch ends, but at least 30s from now
-        now_ts = int(time.time())
-        expiry = max(now_ts + 30, epoch_end_time - config.ORDER_EXPIRY_BUFFER)
+        # Format values with strict precision (Polymarket standard)
+        # Price: max 2-4 decimals, Size: max 6 decimals
+        clean_price = round(float(target_ask), 4)
+        clean_size = round(float(size), 6)
+        
+        # Balance Awareness Check
+        balance = self.get_balance()
+        cost = clean_price * clean_size
+        if balance < cost:
+            logger.error(f"ABORT EXECUTION: Insufficient Balance! Need ${cost:.2f}, Have ${balance:.2f}")
+            return False, None
+
+        # Expiry: Use 0 for GTC as per recent successful trials
+        expiry = 0
         
         try:
-            logger.info(f"Order Attempt: {bias} | Token={token_to_buy} | Price={target_ask} | Size={size} | Expiry={expiry}")
+            logger.info(f"Order Attempt: {bias} | Token={token_to_buy} | Price={clean_price} | Size={clean_size} | Expiry={expiry}")
             
             order_args = OrderArgs(
-                price=target_ask,
-                size=size,
+                price=clean_price,
+                size=clean_size,
                 side="BUY",
                 token_id=token_to_buy,
                 expiration=expiry

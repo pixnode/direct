@@ -1,0 +1,76 @@
+import pandas as pd
+import numpy as np
+import time
+import logging
+import json
+import os
+from datetime import datetime
+
+class MarketAnalyst:
+    def __init__(self, trades_csv="/root/direct/trades.csv", log_file="/root/direct/ads_execution.log"):
+        self.trades_csv = trades_csv
+        self.log_file = log_file
+
+    def analyze_performance(self):
+        if not os.path.exists(self.trades_csv):
+            return {"error": "Belum ada transaksi tercatat."}
+        try:
+            df = pd.read_csv(self.trades_csv)
+            if df.empty: return {"error": "File transaksi kosong."}
+            total = len(df)
+            rejected = len(df[df['fill_status'] == 'REJECTED'])
+            return {"total_trades": total, "rejections": rejected}
+        except: return {"error": "Gagal membaca file transaksi."}
+
+    def get_market_habits(self):
+        if not os.path.exists(self.log_file): return ["Log tidak ditemukan."]
+        habits = []
+        try:
+            with open(self.log_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()[-500:]
+            if any("DEAD" in l for l in lines): habits.append("Deteksi ketidakstabilan feed market.")
+            if any("REJECTED" in l for l in lines): habits.append("Ada penolakan order oleh bursa.")
+            return habits
+        except: return ["Gagal membaca log."]
+
+    def get_realtime_state(self):
+        state_file = "/root/direct/bot_state.json"
+        if not os.path.exists(state_file): return "Bot sedang tidak berjalan."
+        try:
+            with open(state_file, 'r') as f: return json.load(f)
+        except: return "Gagal membaca status real-time."
+
+    def generate_report(self):
+        perf = self.analyze_performance()
+        habits = self.get_market_habits()
+        rt_state = self.get_realtime_state()
+        
+        report = f"📊 **LAPORAN INTELIJEN MARKET ADS v1.0** 📊\n"
+        report += f"Waktu: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+        report += "🔍 **1. Status Bot Real-time:**\n"
+        if isinstance(rt_state, dict):
+            report += f"- Status: {rt_state.get('status', 'IDLE')}\n"
+            report += f"- Gap Saat Ini: {rt_state.get('gap', 0.0):.2f}\n"
+            report += f"- Bias: {rt_state.get('bias', 'NONE')}\n"
+            report += f"- Feed: {'✅ OK' if rt_state.get('binance_connected', False) else '❌ MATI'}\n"
+        else: report += f"- {rt_state}\n"
+
+        report += "\n📈 **2. Performa Historis:**\n"
+        if isinstance(perf, dict) and "error" in perf: report += f"- {perf['error']}\n"
+        elif isinstance(perf, dict):
+            report += f"- Total Sinyal: {perf.get('total_trades', 0)}\n"
+            report += f"- Penolakan: {perf.get('rejections', 0)}\n"
+        
+        report += "\n🧠 **3. Kebiasaan Market:**\n"
+        report += f"- Observasi: {', '.join(habits) if habits else 'Normal'}\n"
+
+        report += "\n💡 **4. Saran Strategis:**\n"
+        if isinstance(perf, dict) and perf.get('rejections', 0) > 0:
+            report += "- SARAN: Cek saldo wallet (min $5 per trade).\n"
+        else: report += "- SARAN: Menunggu volatilitas tinggi untuk eksekusi.\n"
+            
+        return report
+
+if __name__ == '__main__':
+    print(MarketAnalyst().generate_report())

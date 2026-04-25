@@ -9,6 +9,8 @@ from config import (
     GAP_VOL_NORMALIZATION, GAP_VOL_MULTIPLIER, VOL_ESTIMATOR_WINDOW,
     BINANCE_FEED_ENABLED
 )
+import json
+import os
 from discovery import MarketDiscovery
 from executor import Executor
 from performance_logger import PerformanceLogger
@@ -62,6 +64,7 @@ class DirectionalEngine:
         self.effective_gap_threshold = GAP_THRESHOLD_DEFAULT
         
         self.last_log = "Engine Initialized"
+        self._last_state_export = 0
 
     async def _async_log(self, msg):
         try:
@@ -185,15 +188,24 @@ class DirectionalEngine:
                     h_health = "OK" if (loop_now - hl_state.get("last_msg_time", 0)) < 30 else "DEAD"
                     p_health = "OK" if (loop_now - poly_state.get("last_msg_time", 0)) < 30 else "DEAD"
 
+                    # Fetch real balance via executor
+                    current_balance = self.executor.get_balance()
+                    
                     hb_msg = (
                         f"HEARTBEAT | STAT:{self.status} | T-{self.t_minus}s | "
                         f"P:{hl_price:,.2f} | S:{current_strike:,.2f} | "
+                        f"BAL:${current_balance:.2f} | "
                         f"G:{abs_gap:.2f}({g_ok}) | C:{cvd:.1f}%({c_ok}) | "
                         f"V:{abs_velocity:.1f}({v_ok}) | BIAS:{self.bias} | "
                         f"FEED(HL:{h_health} PL:{p_health})"
                     )
                     await self._async_log(hb_msg)
                     last_heartbeat = now
+
+                # Export state for OpenClaw (Bridge)
+                if now - self._last_state_export > 5.0:
+                    self._export_state()
+                    self._last_state_export = now
 
 
                 # Predator Decision Logic (Veto Threshold from Config)
@@ -324,6 +336,11 @@ class DirectionalEngine:
                 record["fill_status"] = "REJECTED"
                 await self._async_log(f"EXECUTION REJECTED by exchange: {bias}")
                 asyncio.create_task(self.notifier.send(f"REJECTED: {bias} {size} @ {target_ask}", level=AlertLevel.WARNING))
+                
+                # PIPELINE FIX: Reset order_sent so bot can try again if the error was temporary (balance/allowance)
+                self.order_sent = False
+                await self._async_log("STATE RESET: Ready for next signal after rejection")
+                
                 await self.perf_logger.log(record)
         except Exception as e:
             await self._async_log(f"EXECUTION EXCEPTION: {type(e).__name__}: {e}")
@@ -386,3 +403,14 @@ class DirectionalEngine:
             "effective_threshold": self.effective_gap_threshold,
             "binance_connected": self.binance_feed.is_connected if self.binance_feed else False
         }
+
+    def _export_state(self):
+        """Writes current state to bot_state.json for OpenClaw monitoring."""
+        try:
+            state = self.get_state()
+            state["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            # Portability FIX: Use relative path instead of hardcoded /root/direct/
+            with open("bot_state.json", "w") as f:
+                json.dump(state, f, indent=4)
+        except Exception as e:
+            logger.error(f"State Export Error: {e}")

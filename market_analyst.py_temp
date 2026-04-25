@@ -1,0 +1,37 @@
+    def generate_report(self):
+        perf = self.analyze_performance()
+        habits = self.get_market_habits()
+        rt_state = self.get_realtime_state()
+        
+        report = f"** ADS v1.0 Market Intelligence Report **\n"
+        report += f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+        report += "** 1. Real-time Bot Status:**\n"
+        if isinstance(rt_state, dict):
+            report += f"- Status: {rt_state.get('status', 'N/A')}\n"
+            report += f"- T-Minus: {rt_state.get('t_minus', 'N/A')}s\n"
+            report += f"- Current Gap: {rt_state.get('gap', 0.0):.2f}\n"
+            report += f"- Bias: {rt_state.get('bias', 'NONE')}\n"
+            report += f"- Feed Health: HL={rt_state.get('binance_connected', False)} | PL={rt_state.get('binance_connected', False)}\n"
+        else:
+            report += f"- {rt_state}\n"
+
+        report += "\n** 2. Historical Performance:**\n"
+        if isinstance(perf, dict) and "error" in perf:
+            report += f"- Status: {perf['error']}\n"
+        elif isinstance(perf, dict):
+            report += f"- Total Signal Attempts: {perf.get('total_trades', 0)}\n"
+            report += f"- Rejection Rate: {perf.get('rejections', 0)}\n"
+            report += f"- Bias Preference: {perf.get('bias_distribution', {})}\n"
+        
+        report += "\n** 3. Market Habits & Anomalies:**\n"
+        obs = ', '.join(habits) if isinstance(habits, list) and habits else "Market behaving normally."
+        report += f"- Observations: {obs}\n"
+
+        report += "\n** 4. Strategic Advice:**\n"
+        if isinstance(perf, dict) and perf.get('rejections', 0) > 0:
+            report += "- Suggest increasing balance to avoid minimum order rejections.\n"
+        else:
+            report += "- Execution logic is optimal or waiting for first trade.\n"
+            
+        return report

@@ -33,6 +33,7 @@ POLYMARKET_API_KEY        = _require("POLYMARKET_API_KEY")
 POLYMARKET_API_SECRET     = _require("POLYMARKET_API_SECRET")
 POLYMARKET_API_PASSPHRASE = _require("POLYMARKET_API_PASSPHRASE")
 POLYMARKET_HOST           = _optional("POLYMARKET_HOST", "https://clob.polymarket.com")
+POLYMARKET_FUNDER_ADDRESS = _optional("POLYMARKET_FUNDER_ADDRESS", "")
 CHAIN_ID                  = _optional("CHAIN_ID", 137, int)
 
 # Strategy Thresholds
