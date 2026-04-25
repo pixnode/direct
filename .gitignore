@@ -4,3 +4,4 @@ __pycache__/
 .gemini/
 venv/
 .vscode/
+*.csv

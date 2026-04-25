@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs
 import config
@@ -9,6 +10,8 @@ logger = logging.getLogger("ADS_Engine")
 
 class Executor:
     def __init__(self):
+        self._thread_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="clob_exec")
+        self.is_ready = False
         try:
             # Initialize the Real ClobClient
             self.client = ClobClient(
@@ -17,41 +20,39 @@ class Executor:
                 chain_id=config.CHAIN_ID
             )
             
-            # Apply API Credentials if available
-            if config.POLYMARKET_API_KEY:
-                self.client.set_api_creds(
-                    config.POLYMARKET_API_KEY, 
-                    config.POLYMARKET_API_SECRET, 
-                    config.POLYMARKET_API_PASSPHRASE
-                )
-                logger.info("Executor: API Credentials applied successfully.")
-            else:
-                logger.error("FATAL: POLYMARKET_API_KEY kosong di .env")
-                logger.error("Jalankan: python scripts/setup_credentials.py")
-                self.is_ready = False
-                return
-
+            from py_clob_client.clob_types import ApiCreds
+            
+            # Apply API Credentials
+            creds = ApiCreds(
+                api_key=config.POLYMARKET_API_KEY, 
+                api_secret=config.POLYMARKET_API_SECRET, 
+                api_passphrase=config.POLYMARKET_API_PASSPHRASE
+            )
+            self.client.set_api_creds(creds)
+            logger.info("Executor: API Credentials applied successfully.")
             self.is_ready = True
+
             logger.info("Executor: Real ClobClient Initialized (LIVE MODE)")
         except Exception as e:
-            self.is_ready = False
             logger.error(f"Executor Initialization Failed: {e}")
 
-    async def execute(self, bias, size, target_ask, token_up, token_down):
+    async def execute(self, bias, size, target_ask, token_up, token_down, epoch_end_time):
+        """
+        Executes a trade on Polymarket CLOB in a non-blocking manner.
+        Includes retry logic for network errors.
+        """
         if not self.is_ready:
-            if not config.POLYMARKET_API_KEY:
-                logger.warning("WARNING: No API creds set")
             logger.error("Executor not ready. Skipping trade.")
-            return False
+            return False, None
 
         token_to_buy = token_up if bias == "UP" else token_down
         
+        # Calculate Expiry: Buffer seconds before epoch ends, but at least 30s from now
+        now_ts = int(time.time())
+        expiry = max(now_ts + 30, epoch_end_time - config.ORDER_EXPIRY_BUFFER)
+        
         try:
-            # Place a real LIMIT order on Polymarket
-            # We use GTC (Good Till Cancelled) by default
-            expiry = int(time.time()) + 280 # 4 menit 40 detik
-            
-            logger.info(f"Order Sending: Token={token_to_buy}, Price={target_ask}, Size={size}")
+            logger.info(f"Order Attempt: {bias} | Token={token_to_buy} | Price={target_ask} | Size={size} | Expiry={expiry}")
             
             order_args = OrderArgs(
                 price=target_ask,
@@ -61,17 +62,40 @@ class Executor:
                 expiration=expiry
             )
             
-            # Post the order to the CLOB
-            resp = self.client.create_and_post_order(order_args)
-            logger.info(f"Full Response: {resp}")
+            loop = asyncio.get_event_loop()
             
-            if resp and resp.get("success"):
-                logger.info(f"LIVE EXECUTED: BUY {bias} | Size: {size} | Token: {token_to_buy} @ {target_ask}")
-                return True
-            else:
-                logger.error(f"LIVE EXECUTION REJECTED: {resp}")
-                return False
+            for attempt in range(config.MAX_ORDER_RETRIES + 1):
+                try:
+                    # Post the order to the CLOB (Offloaded to thread pool)
+                    resp = await loop.run_in_executor(
+                        self._thread_pool,
+                        self.client.create_and_post_order,
+                        order_args
+                    )
+                    
+                    if resp and resp.get("success"):
+                        order_id = resp.get("orderID")
+                        logger.info(f"LIVE EXECUTED: BUY {bias} | Size: {size} | Token: {token_to_buy} @ {target_ask} | ID: {order_id}")
+                        return True, order_id
+                    else:
+                        # Rejection from exchange - do not retry
+                        logger.error(f"LIVE EXECUTION REJECTED: {resp}")
+                        return False, None
+                        
+                except Exception as e:
+                    if attempt < config.MAX_ORDER_RETRIES:
+                        delay = 0.1 * (attempt + 1)
+                        logger.warning(f"Order Attempt {attempt+1} failed ({type(e).__name__}: {e}). Retrying in {delay}s...")
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(f"Order Failed after {attempt+1} attempts: {e}")
+                        return False, None
                 
         except Exception as e:
-            logger.error(f"Live Execution Error: {e}")
-            return False
+            logger.error(f"Critical Execution Error: {e}")
+            return False, None
+
+    async def shutdown(self):
+        """Clean shutdown of thread pool."""
+        logger.info("Executor: Shutting down thread pool...")
+        self._thread_pool.shutdown(wait=False)

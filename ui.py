@@ -8,6 +8,7 @@ from rich.text import Text
 from rich.console import Console
 from rich.align import Align
 from collections import deque
+from config import OVERRIDE_GAP_THRESHOLD
 
 class Dashboard:
     def __init__(self, engine, hl_feed, poly_feed):
@@ -69,11 +70,14 @@ class Dashboard:
         table.add_row("Poly Strike", f"${p_state['strike_price']:,.2f}", "[magenta]SYNC[/]")
         table.add_row("", "", "") # Spacer
         table.add_row("GAP ($)", f"{e_state['gap']:,.2f}", ok_fail(e_state["gap_pass"]))
+        table.add_row("EFF.THRESHOLD", f"${e_state.get('effective_threshold', 0):.1f}", "[cyan]ADAPT[/]")
         table.add_row("CVD (%)", f"{h_state['cvd']:.1f}%", ok_fail(e_state["cvd_pass"]))
         table.add_row("VELOCITY", f"{h_state['velocity']:.1f}", ok_fail(e_state["vel_pass"]))
         table.add_row("", "", "") # Spacer
         table.add_row("T-MINUS", f"{e_state['t_minus']}s", "[yellow]COUNT[/]")
-        table.add_row("FEED HEALTH", f"HL:{'OK' if h_ok else '!!'}", f"PL:{'OK' if p_ok else '!!'}")
+        
+        bn_status = "OK" if e_state.get("binance_connected") else "--"
+        table.add_row("FEED HEALTH", f"HL:{'OK' if h_ok else '!!'} BN:{bn_status}", f"PL:{'OK' if p_ok else '!!'}")
 
         return Panel(table, title="[bold cyan]MARKET STREAM[/]", border_style="cyan")
 
@@ -97,7 +101,7 @@ class Dashboard:
         win_text = "[red]WAITING[/]"
         if 15 <= t <= 120: 
             if 15 <= t <= 45: win_text = "[bold green]TRIPLE WINDOW[/]"
-            if 15 <= t <= 120 and e_state['gap'] >= 110: # Special logic for display
+            if 15 <= t <= 120 and abs(e_state['gap']) >= OVERRIDE_GAP_THRESHOLD:
                 win_text = "[bold magenta]OVERRIDE WINDOW[/]"
             elif 15 <= t <= 120:
                 # If we are in the long tail but gap not enough for override

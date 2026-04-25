@@ -2,9 +2,18 @@ import asyncio
 import json
 import websockets
 import time
+import logging
 from collections import deque
+import config
+
+logger = logging.getLogger("ADS_Engine")
 
 class HyperliquidFeed:
+    """
+    Feed for Hyperliquid BTC Perpetual trades.
+    Note: The 'cvd' metric calculated here is actually Order Flow Imbalance (OFI) 
+    expressed as a percentage within the window, not a running Cumulative Volume Delta.
+    """
     def __init__(self):
         self.ws_url = "wss://api.hyperliquid.xyz/ws"
         self.coin = "BTC"
@@ -25,10 +34,24 @@ class HyperliquidFeed:
         self.last_msg_time = 0.0
 
     async def connect(self):
+        attempt = 0
         while True:
             try:
-                async with websockets.connect(self.ws_url) as ws:
+                backoff = min(0.5 * (2 ** attempt), config.MAX_RECONNECT_DELAY)
+                if attempt > 0:
+                    logger.warning(f"Hyperliquid: Reconnecting in {backoff:.1f}s (Attempt {attempt})")
+                    await asyncio.sleep(backoff)
+
+                async with websockets.connect(
+                    self.ws_url,
+                    ping_interval=config.WS_PING_INTERVAL,
+                    ping_timeout=config.WS_PING_TIMEOUT,
+                    close_timeout=5
+                ) as ws:
                     self.is_connected = True
+                    attempt = 0 # Reset on success
+                    logger.info("Hyperliquid Feed Connected")
+                    
                     # Subscribe to trades
                     subscribe_msg = {
                         "method": "subscribe",
@@ -40,7 +63,10 @@ class HyperliquidFeed:
                         await self._process_message(message)
             except Exception as e:
                 self.is_connected = False
-                await asyncio.sleep(1)
+                attempt += 1
+                logger.error(f"Hyperliquid Connection Error: {e}")
+                if attempt > 10: # Avoid infinite tight loop if something is fundamentally wrong
+                    await asyncio.sleep(1)
 
     async def _process_message(self, message):
         self.last_msg_time = asyncio.get_event_loop().time()
@@ -90,11 +116,25 @@ class HyperliquidFeed:
         else:
             self.cvd_value = 0.0
 
-        # Calculate Velocity
-        if self.vel_trades:
-            oldest_velocity_price = self.vel_trades[0][1]
-            newest_velocity_price = self.vel_trades[-1][1]
-            self.velocity_value = newest_velocity_price - oldest_velocity_price
+        # Calculate VWAP-based Velocity
+        trades = list(self.vel_trades)
+        if len(trades) >= 3:
+            mid = len(trades) // 2
+            early_trades = trades[:mid]
+            late_trades = trades[mid:]
+            
+            def vwap(t_list):
+                total_val = sum(p * s for _, p, s, _ in t_list)
+                total_sz = sum(s for _, _, s, _ in t_list)
+                return total_val / total_sz if total_sz > 0 else 0.0
+            
+            early_vwap = vwap(early_trades)
+            late_vwap = vwap(late_trades)
+            
+            if early_vwap > 0:
+                self.velocity_value = late_vwap - early_vwap
+            else:
+                self.velocity_value = 0.0
         else:
             self.velocity_value = 0.0
 

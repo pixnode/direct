@@ -5,10 +5,17 @@ from config import (
     GAP_THRESHOLD_DEFAULT, CVD_THRESHOLD_PCT, VELOCITY_MIN_DELTA, 
     DIRECTIONAL_MAX_ODDS, BASE_SHARES, SNIPER_ZONE_END, 
     CONFIRMATION_WINDOW_START, OVERRIDE_WINDOW_START,
-    OVERRIDE_GAP_THRESHOLD, HEARTBEAT_INTERVAL
+    OVERRIDE_GAP_THRESHOLD, HEARTBEAT_INTERVAL, VETO_MULTIPLIER,
+    GAP_VOL_NORMALIZATION, GAP_VOL_MULTIPLIER, VOL_ESTIMATOR_WINDOW,
+    BINANCE_FEED_ENABLED
 )
 from discovery import MarketDiscovery
 from executor import Executor
+from performance_logger import PerformanceLogger
+from order_status_poller import OrderStatusPoller
+from notifier import Notifier, AlertLevel
+from strategy_utils import VolatilityEstimator
+from binance_feed import BinanceFeed
 
 logger = logging.getLogger("ADS_Engine")
 logger.setLevel(logging.INFO)
@@ -39,10 +46,22 @@ class DirectionalEngine:
         self.token_down = None
         self.reference_price = 0.0
         
-        # UI state
-        self.last_log = "Engine Initialized"
+        # Inventory & Risk tracking
         self.inventory_position = "NONE"
         self.inventory_risk = 0.0
+        self.epoch_orders = []
+        self.total_spent = 0.0
+        self.current_epoch_spent = 0.0
+
+        # Enhancements
+        self.perf_logger = PerformanceLogger()
+        self.poller = OrderStatusPoller(self.executor.client, self.executor._thread_pool)
+        self.notifier = Notifier()
+        self.vol_estimator = VolatilityEstimator(window=VOL_ESTIMATOR_WINDOW)
+        self.binance_feed = BinanceFeed() if BINANCE_FEED_ENABLED else None
+        self.effective_gap_threshold = GAP_THRESHOLD_DEFAULT
+        
+        self.last_log = "Engine Initialized"
 
     async def _async_log(self, msg):
         try:
@@ -61,9 +80,27 @@ class DirectionalEngine:
             
             if epoch != self.current_epoch or not self.token_up:
                 if epoch != self.current_epoch:
+                    # Epoch Summary for Notifier
+                    if self.current_epoch > 0:
+                        summary = (
+                            f"Epoch {self.current_epoch} Ended | "
+                            f"Orders: {len(self.epoch_orders)} | "
+                            f"Spent: ${self.current_epoch_spent:.2f} | "
+                            f"Total Spent: ${self.total_spent:.2f}"
+                        )
+                        asyncio.create_task(self.notifier.send(summary, level=AlertLevel.INFO))
+
                     await self._async_log(f"NETWORK: New Epoch Detected: {epoch}")
                     self.current_epoch = epoch
                     self.token_up = None
+                    
+                    # Reset order state only when epoch truly changes
+                    self.order_sent = False
+                    self.status = "IDLE"
+                    self.gate_passed = False
+                    self.current_epoch_spent = 0.0
+                    self.epoch_orders = []
+                    await self._async_log("ORDER LOCK RELEASED: New epoch started")
                 
                 market_data = await self.discovery.discover_tokens(epoch)
                 
@@ -93,19 +130,14 @@ class DirectionalEngine:
         while True:
             try:
                 now = time.time()
-                # Reload Peluru Logic
-                current_window = int(now - (now % 300))
-                if current_window != self.window_start:
-                    self.window_start = current_window
-                    self.order_sent = False
+                # State Machine based on t_minus (Fixed Granularity)
+                if self.t_minus > OVERRIDE_WINDOW_START + 15:
                     self.status = "IDLE"
-                    await self._async_log(f"RELOAD: New Window Started @ {self.window_start}")
-
-                # State Machine based on t_minus
-                max_window = max(CONFIRMATION_WINDOW_START, OVERRIDE_WINDOW_START)
-                if self.t_minus > max_window + 15:
-                    self.status = "IDLE"
-                elif SNIPER_ZONE_END < self.t_minus <= max_window + 15:
+                elif OVERRIDE_WINDOW_START < self.t_minus <= OVERRIDE_WINDOW_START + 15:
+                    self.status = "ARMING"
+                elif CONFIRMATION_WINDOW_START < self.t_minus <= OVERRIDE_WINDOW_START:
+                    self.status = "OVERRIDE_WATCH"
+                elif SNIPER_ZONE_END < self.t_minus <= CONFIRMATION_WINDOW_START:
                     self.status = "SNIPER_READY"
                 elif self.t_minus <= SNIPER_ZONE_END:
                     self.status = "CEASE_FIRE"
@@ -126,17 +158,25 @@ class DirectionalEngine:
                         await self._async_log(f"REFERENCE SET: {self.reference_price}")
                     current_strike = self.reference_price
 
-                # Directional Logic
+                # 1. Update Price & Bias FIRST
                 if current_strike > 0 and hl_price > 0:
                     self.gap = hl_price - current_strike
                     self.bias = "UP" if self.gap > 0 else "DOWN" if self.gap < 0 else "NONE"
+
+                # 2. Update Volatility Estimator ONLY on price change
+                if hl_price > 0 and hl_price != getattr(self, '_last_vol_price', 0):
+                    self.vol_estimator.update(hl_price)
+                    self._last_vol_price = hl_price
+                
+                # 3. NOW calculate effective threshold
+                self.effective_gap_threshold = self._get_effective_gap_threshold()
 
                 abs_gap = abs(self.gap)
                 abs_velocity = abs(velocity)
 
                 if now - last_heartbeat > HEARTBEAT_INTERVAL:
                     # Determine gate status for logging
-                    g_ok = "OK" if abs_gap > GAP_THRESHOLD_DEFAULT else "FAIL"
+                    g_ok = "OK" if abs_gap >= self.effective_gap_threshold else "FAIL"
                     c_ok = "OK" if ((self.bias == "UP" and cvd > CVD_THRESHOLD_PCT) or (self.bias == "DOWN" and cvd < -CVD_THRESHOLD_PCT)) else "FAIL"
                     v_ok = "OK" if abs_velocity > VELOCITY_MIN_DELTA else "FAIL"
                     
@@ -156,17 +196,18 @@ class DirectionalEngine:
                     last_heartbeat = now
 
 
-                # Predator Decision Logic
+                # Predator Decision Logic (Veto Threshold from Config)
+                veto_threshold = CVD_THRESHOLD_PCT * VETO_MULTIPLIER
                 veto = False
-                if self.bias == "UP" and cvd < -30:
+                if self.bias == "UP" and cvd < -veto_threshold:
                     veto = True
-                elif self.bias == "DOWN" and cvd > 30:
+                elif self.bias == "DOWN" and cvd > veto_threshold:
                     veto = True
 
                 # Signal Evaluation
                 is_override = abs_gap >= OVERRIDE_GAP_THRESHOLD
                 
-                gap_pass = abs_gap >= GAP_THRESHOLD_DEFAULT
+                gap_pass = abs_gap >= self.effective_gap_threshold
                 cvd_pass = not veto and ((self.bias == "UP" and cvd >= CVD_THRESHOLD_PCT) or (self.bias == "DOWN" and cvd <= -CVD_THRESHOLD_PCT))
                 vel_pass = abs_velocity >= VELOCITY_MIN_DELTA
                 is_triple = gap_pass and cvd_pass and vel_pass
@@ -194,7 +235,7 @@ class DirectionalEngine:
                 if not can_execute and not self.order_sent:
                     now_ts = time.time()
                     if not hasattr(self, '_last_waiting_log') or (now_ts - self._last_waiting_log > 10):
-                        logger.info(f"Waiting for signal: gap={abs_gap:.1f}/{GAP_THRESHOLD_DEFAULT} cvd={cvd:.1f}/{CVD_THRESHOLD_PCT} vel={abs_velocity:.1f}/{VELOCITY_MIN_DELTA}")
+                        logger.info(f"Waiting for signal: gap={abs_gap:.1f}/{self.effective_gap_threshold:.1f} cvd={cvd:.1f}/{CVD_THRESHOLD_PCT} vel={abs_velocity:.1f}/{VELOCITY_MIN_DELTA}")
                         self._last_waiting_log = now_ts
 
                 self.gate_passed = can_execute # For UI indication
@@ -211,17 +252,15 @@ class DirectionalEngine:
                         
                         await self._async_log(f"TARGET TRIGGER: {trigger_reason} | {self.bias} Gap:{abs_gap:.2f} CVD:{cvd:.1f} T-{self.t_minus}s")
                         
-                        # Non-Blocking Call
-                        asyncio.create_task(self.executor.execute(
+                        # Guarded Execution Call
+                        asyncio.create_task(self._execute_with_guard(
                             bias=self.bias,
                             size=BASE_SHARES,
                             target_ask=target_ask,
                             token_up=self.token_up,
-                            token_down=self.token_down
+                            token_down=self.token_down,
+                            epoch_end_time=self.discovery.get_next_epoch()
                         ))
-                        
-                        self.inventory_position = self.bias
-                        self.inventory_risk += (BASE_SHARES * target_ask)
                     else:
                         now_ts = time.time()
                         if not hasattr(self, '_last_skip_log') or (now_ts - self._last_skip_log > 5):
@@ -233,6 +272,103 @@ class DirectionalEngine:
             
             await asyncio.sleep(0.01)
 
+    async def _execute_with_guard(self, **kwargs):
+        """Wrapper for executor calls with error handling, polling, and detailed logging."""
+        start_ts = time.time()
+        try:
+            bias = kwargs.get('bias')
+            target_ask = kwargs.get('target_ask')
+            size = kwargs.get('size')
+            token_up = kwargs.get('token_up')
+            token_down = kwargs.get('token_down')
+            
+            # Prepare record for Phase 1 Data Collection
+            # Some fields will be updated after execution/polling
+            binance_ofi = 0.0
+            if self.binance_feed:
+                binance_ofi = self.binance_feed.get_state()["ofi"]
+
+            record = {
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "epoch": self.current_epoch,
+                "signal_type": "TRIPLE" if self.t_minus <= CONFIRMATION_WINDOW_START else "OVERRIDE",
+                "bias": bias,
+                "strike_price": self.poly_feed.strike_price,
+                "gap": self.gap,
+                "effective_threshold": self.effective_gap_threshold,
+                "cvd": self.hl_feed.get_state()["cvd"],
+                "velocity": self.hl_feed.get_state()["velocity"],
+                "binance_ofi": binance_ofi,
+                "up_ask": self.poly_feed.up_ask,
+                "down_ask": self.poly_feed.down_ask,
+                "size": size,
+                "target_ask": target_ask,
+                "fill_status": "SENT"
+            }
+            
+            # Atomic Lock is already set to True by caller (run loop)
+            success, order_id = await self.executor.execute(**kwargs)
+            
+            latency = (time.time() - start_ts) * 1000 # ms
+            record["order_id"] = order_id
+            record["latency"] = f"{latency:.2f}ms"
+            
+            if success and order_id:
+                await self._async_log(f"EXECUTION SUCCESS: {bias} @ {target_ask} | ID: {order_id}")
+                msg = f"EXECUTED: {bias} {size} shares @ {target_ask} (Gap: {abs(self.gap):.1f})"
+                asyncio.create_task(self.notifier.send(msg, level=AlertLevel.TRADE))
+                
+                # Start non-blocking polling for fill status
+                asyncio.create_task(self._poll_and_finalize(record, order_id, epoch_end_time=kwargs.get('epoch_end_time')))
+            else:
+                record["fill_status"] = "REJECTED"
+                await self._async_log(f"EXECUTION REJECTED by exchange: {bias}")
+                asyncio.create_task(self.notifier.send(f"REJECTED: {bias} {size} @ {target_ask}", level=AlertLevel.WARNING))
+                await self.perf_logger.log(record)
+        except Exception as e:
+            await self._async_log(f"EXECUTION EXCEPTION: {type(e).__name__}: {e}")
+            asyncio.create_task(self.notifier.send(f"EXCEPTION during execution: {e}", level=AlertLevel.CRITICAL))
+
+    async def _poll_and_finalize(self, record, order_id, epoch_end_time):
+        """Polls for order status and logs the final record."""
+        try:
+            final_status = await self.poller.poll_order(order_id, epoch_end_time=epoch_end_time)
+            record["fill_status"] = final_status
+            
+            # Log to CSV
+            await self.perf_logger.log(record)
+        except Exception as e:
+            logger.error(f"Finalize Error: {e}")
+
+    def _get_effective_gap_threshold(self) -> float:
+        """Returns the volatility-adjusted gap threshold, potentially gated by Binance OFI."""
+        base_threshold = GAP_THRESHOLD_DEFAULT
+        
+        # Volatility Adjustment
+        if GAP_VOL_NORMALIZATION:
+            realized_vol = self.vol_estimator.get_realized_vol()
+            if realized_vol > 0:
+                base_threshold = max(GAP_THRESHOLD_DEFAULT, realized_vol * GAP_VOL_MULTIPLIER)
+            
+        # Binance OFI Conviction Logic
+        if self.binance_feed and self.binance_feed.is_connected:
+            bn_ofi = self.binance_feed.get_state()["ofi"]
+            BINANCE_OFI_MIN = 5.0 # Noise filter
+            
+            # Feeds are aligned if both are positive (UP) or both negative (DOWN)
+            feeds_aligned = (
+                (self.bias == "UP" and bn_ofi > BINANCE_OFI_MIN) or
+                (self.bias == "DOWN" and bn_ofi < -BINANCE_OFI_MIN)
+            )
+            
+            is_neutral = abs(bn_ofi) < BINANCE_OFI_MIN
+            
+            if not feeds_aligned and not is_neutral:
+                # Require 50% larger gap if spot market is actively fighting the perp trend
+                return base_threshold * 1.5
+                
+        return base_threshold
+
     def get_state(self):
         return {
             "status": self.status,
@@ -241,10 +377,12 @@ class DirectionalEngine:
             "gap": self.gap,
             "bias": self.bias,
             "gate_passed": self.gate_passed,
-            "gap_pass": abs(self.gap) > GAP_THRESHOLD_DEFAULT,
-            "cvd_pass": abs(self.hl_feed.get_state()["cvd"]) > CVD_THRESHOLD_PCT,
-            "vel_pass": abs(self.hl_feed.get_state()["velocity"]) > VELOCITY_MIN_DELTA,
+            "gap_pass": abs(self.gap) >= self.effective_gap_threshold,
+            "cvd_pass": abs(self.hl_feed.get_state()["cvd"]) >= CVD_THRESHOLD_PCT,
+            "vel_pass": abs(self.hl_feed.get_state()["velocity"]) >= VELOCITY_MIN_DELTA,
             "inventory_position": self.inventory_position,
             "inventory_risk": self.inventory_risk,
-            "last_log": self.last_log
+            "last_log": self.last_log,
+            "effective_threshold": self.effective_gap_threshold,
+            "binance_connected": self.binance_feed.is_connected if self.binance_feed else False
         }
