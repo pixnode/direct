@@ -102,9 +102,9 @@ class Executor:
                         logger.info(f"LIVE EXECUTED: BUY {bias} | Size: {size} | Token: {token_to_buy} @ {target_ask} | ID: {order_id}")
                         return True, order_id
                     else:
-                        # Rejection from exchange - do not retry
+                        # Rejection from exchange - return the response for logging/notification
                         logger.error(f"LIVE EXECUTION REJECTED: {resp}")
-                        return False, None
+                        return False, resp
                         
                 except Exception as e:
                     if attempt < config.MAX_ORDER_RETRIES:

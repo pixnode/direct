@@ -7,7 +7,7 @@ from config import (
     CONFIRMATION_WINDOW_START, OVERRIDE_WINDOW_START,
     OVERRIDE_GAP_THRESHOLD, HEARTBEAT_INTERVAL, VETO_MULTIPLIER,
     GAP_VOL_NORMALIZATION, GAP_VOL_MULTIPLIER, VOL_ESTIMATOR_WINDOW,
-    BINANCE_FEED_ENABLED
+    BINANCE_FEED_ENABLED, OVERRIDE_MAX_ODDS
 )
 import json
 import os
@@ -83,16 +83,7 @@ class DirectionalEngine:
             
             if epoch != self.current_epoch or not self.token_up:
                 if epoch != self.current_epoch:
-                    # Epoch Summary for Notifier
-                    if self.current_epoch > 0:
-                        summary = (
-                            f"Epoch {self.current_epoch} Ended | "
-                            f"Orders: {len(self.epoch_orders)} | "
-                            f"Spent: ${self.current_epoch_spent:.2f} | "
-                            f"Total Spent: ${self.total_spent:.2f}"
-                        )
-                        asyncio.create_task(self.notifier.send(summary, level=AlertLevel.INFO))
-
+                    # Epoch transitions are now logged locally only (removed Telegram info)
                     await self._async_log(f"NETWORK: New Epoch Detected: {epoch}")
                     self.current_epoch = epoch
                     self.token_up = None
@@ -195,6 +186,7 @@ class DirectionalEngine:
                         f"HEARTBEAT | STAT:{self.status} | T-{self.t_minus}s | "
                         f"P:{hl_price:,.2f} | S:{current_strike:,.2f} | "
                         f"BAL:${current_balance:.2f} | "
+                        f"U:{poly_state['up_ask']:.2f} D:{poly_state['down_ask']:.2f} | "
                         f"G:{abs_gap:.2f}({g_ok}) | C:{cvd:.1f}%({c_ok}) | "
                         f"V:{abs_velocity:.1f}({v_ok}) | BIAS:{self.bias} | "
                         f"FEED(HL:{h_health} PL:{p_health})"
@@ -255,8 +247,7 @@ class DirectionalEngine:
                 if can_execute and not self.order_sent and self.token_up:
                     target_ask = poly_state["up_ask"] if self.bias == "UP" else poly_state["down_ask"]
                     
-                    # Panic Buy Mode: Override uses its own configurable MAX_ODDS (default 0.99)
-                    from config import OVERRIDE_MAX_ODDS
+                    # Panic Buy Mode: Override uses its own configurable MAX_ODDS
                     effective_max_odds = OVERRIDE_MAX_ODDS if "Override" in trigger_reason else DIRECTIONAL_MAX_ODDS
                     
                     if 0 < target_ask <= effective_max_odds:
@@ -328,15 +319,20 @@ class DirectionalEngine:
             
             if success and order_id:
                 await self._async_log(f"EXECUTION SUCCESS: {bias} @ {target_ask} | ID: {order_id}")
-                msg = f"EXECUTED: {bias} {size} shares @ {target_ask} (Gap: {abs(self.gap):.1f})"
+                msg = f"TRADE EXECUTED: {bias} {size} shares @ {target_ask} (Gap: {abs(self.gap):.1f})"
                 asyncio.create_task(self.notifier.send(msg, level=AlertLevel.TRADE))
                 
                 # Start non-blocking polling for fill status
                 asyncio.create_task(self._poll_and_finalize(record, order_id, epoch_end_time=kwargs.get('epoch_end_time')))
             else:
+                reason = order_id # order_id contains 'resp' on failure now
+                error_detail = reason.get("error", "Unknown Reason") if isinstance(reason, dict) else str(reason)
+                
                 record["fill_status"] = "REJECTED"
-                await self._async_log(f"EXECUTION REJECTED by exchange: {bias}")
-                asyncio.create_task(self.notifier.send(f"REJECTED: {bias} {size} @ {target_ask}", level=AlertLevel.WARNING))
+                await self._async_log(f"EXECUTION REJECTED: {bias} | Reason: {error_detail}")
+                
+                rej_msg = f"REJECTED: {bias} {size} @ {target_ask} | {error_detail}"
+                asyncio.create_task(self.notifier.send(rej_msg, level=AlertLevel.WARNING))
                 
                 # PIPELINE FIX: Reset order_sent so bot can try again if the error was temporary (balance/allowance)
                 self.order_sent = False

@@ -1,0 +1,17 @@
+{
+    "status": "ARMING",
+    "slug": "btc-updown-5m-1777183200",
+    "t_minus": 98,
+    "gap": -7.0,
+    "bias": "DOWN",
+    "gate_passed": false,
+    "gap_pass": false,
+    "cvd_pass": true,
+    "vel_pass": false,
+    "inventory_position": "NONE",
+    "inventory_risk": 0.0,
+    "last_log": "HEARTBEAT | STAT:ARMING | T-98s | P:77,986.00 | S:77,993.00 | BAL:$7733645.00 | U:0.90 D:0.11 | G:7.00(FAIL) | C:-55.3%(OK) | V:0.0(FAIL) | BIAS:DOWN | FEED(HL:OK PL:OK)",
+    "effective_threshold": 45.0,
+    "binance_connected": false,
+    "last_updated": "2026-04-26 13:03:23"
+}

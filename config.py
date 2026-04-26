@@ -50,7 +50,7 @@ OVERRIDE_GAP_THRESHOLD    = _optional("OVERRIDE_GAP_THRESHOLD", 90.0, float)
 
 # Execution Parameters
 DIRECTIONAL_MAX_ODDS      = _optional("DIRECTIONAL_MAX_ODDS", 0.78, float)
-OVERRIDE_MAX_ODDS         = _optional("OVERRIDE_MAX_ODDS", 0.99, float)
+OVERRIDE_MAX_ODDS         = _optional("OVERRIDE_MAX_ODDS", 0.90, float)
 BASE_SHARES               = _optional("BASE_SHARES", 1.0, float)
 HEARTBEAT_INTERVAL        = _optional("HEARTBEAT_INTERVAL", 1.0, float)
 
