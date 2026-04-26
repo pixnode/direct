@@ -5,3 +5,4 @@ __pycache__/
 venv/
 .vscode/
 *.csv
+bot_state.json
